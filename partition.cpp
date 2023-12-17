@@ -5,12 +5,15 @@
 
 //igraph_vector_reserve(igraph_vector_t* v, igraph_integer_t capacity);
 
+// всякие перкладывания значений из одного вектора в другой точно надо параллелить
+// хотя и возникнет много вложенной параллелизации, которой нет
+
 bool FlipCoin() {
     return static_cast<double>(std::rand()) / RAND_MAX > 0.5;
 }
 
-int UniqueCnt(const igraph_vector_int_t* v) {
-    set<int> cnt;
+size_t UniqueCnt(const igraph_vector_int_t* v) {
+    set<int> cnt; // не int, а что там у них
     for (size_t i = 0; i < igraph_vector_int_size(v); ++i) {
         cnt.insert(VECTOR(v)[i]);
     }
@@ -18,79 +21,195 @@ int UniqueCnt(const igraph_vector_int_t* v) {
 }
 
 Partition::Partition(igraph_t* graph, double sample_fraction,
-                    igraph_vector_int_t* init_partition) 
+                    const igraph_vector_int_t* init_partition) 
     : n_nodes(igraph_vcount(graph))
-    , n_edges(igraph_ecount(graph)) 
-    , sample_size_nodes(n_nodes * sample_fraction)
-    , sample_size_edges(n_edges * sample_fraction) {
-        this->_graph = graph; //возможно стоит всё-таки делать поверхностную копию и destroy тлько в main
+    , n_edges(igraph_ecount(graph)) {
+        this->_graph = graph; //destroy только в main
         if (init_partition == NULL) {
-            InitializePartition();
+            InitializePartition(sample_fraction);
         } else {
-            igraph_vector_int_update(_membership, init_partition);
-            n_comms = UniqueCnt(_membership);
+            igraph_vector_int_update(&_membership, init_partition);
+            n_comms = UniqueCnt(&_membership);
         }
     }
 
 Partition::~Partition() {
-    igraph_destroy((igraph_t*)this->_graph);
     delete this->_graph;
-    igraph_vector_int_destroy(_membership);
-    delete this->_membership;
+    igraph_vector_int_destroy(&_membership);
 }
 
 Partition Partition::Optimize() {
+    igraph_vector_int_t node_weights; // сделать полем класса, 
+    // чтобы не аллоцировать память каждый раз? пока не очень понимаю, 
+    // сколько раз вызывается для 1 объекта. если больше 1, то имеет смысл
+    igraph_vector_int_init(&node_weights, n_nodes);
+    igraph_degree(_graph, &node_weights, igraph_vss_all(), IGRAPH_ALL, true);
 
+    igraph_community_leiden(_graph, NULL, &node_weights, 1.0/(2*n_edges), 
+                    0.01, true, 3, &_membership, &n_comms, &_fittness);
+    
+    igraph_vector_int_destroy(&node_weights);
 }
 
-void Partition::NewmanSplit(const vector<size_t>& indices, 
-    size_t /*не уверена насчёт типа данных*/ comm_id_to_split) {
-
+//Newman  O(|E|+|V|^2*steps)
+//Walktrap O(|E||V|^2) in the worst case, O(|V|^2 log|V|) typically
+//spinglass ?
+//проблемка - в сишной версии нельзя указать, сколько кластеров я хочу, только максимальное количество итераций, а они не очень-то коррелируют
+// кажется, этот метод должен быть private
+void Partition::NewmanSplit(igraph_vector_int_t* indices, igraph_integer_t comm_id_to_split) {
+    igraph_t subgraph;
+    igraph_induced_subgraph(_graph, &subgraph, igraph_vss_vector(indices), IGRAPH_SUBGRAPH_AUTO);
+    igraph_vector_int_t* subgraph_membership = indices;
+    igraph_community_leading_eigenvector(&subgraph, NULL, NULL, subgraph_membership, 5 /*steps ?*/, 
+                                        NULL, NULL, false, NULL, NULL, NULL, NULL, NULL);
+    for (size_t i = 0; i < igraph_vector_int_size(subgraph_membership); ++i) {
+        VECTOR(subgraph_membership)[i] = VECTOR(*subgraph_membership)[i] == 0 ? comm_id_to_split : n_comms;
     }
+    
+    for (size_t i = 0, j = 0; i < n_nodes; ++i) {
+        if (VECTOR(_membership)[i] == comm_id_to_split) {
+            VECTOR(_membership)[i] = VECTOR(*subgraph_membership)[j];
+            j++;
+        }
+    }
+    n_comms++;
+    igraph_destroy(&subgraph);
+}
+
+// кажется, этот метод должен быть private
+void Partition::RandomSplit(igraph_vector_int_t* indices) {
+    /*
+    size_to_split = min(1, np.random.choice(len(indices)//2))
+    idx_to_split = np.random.choice(indices, size=size_to_split, replace=False)
+    self.membership[idx_to_split] = self.n_comms
+
+    меня смущает этот код, тут как будто бы min - это ошибка, 
+    и нужно на самом деле max. но при этом я не уверена, что так вообще 
+    останутся связанные компоненты
+    */
+    n_comms++;
+}
 
 
-void Partition::RandomSplit(const vector<size_t>& indices) {
-
+void Partition::RandomMerge() {
+    /*
+    candidate_edges = random.choices(self.G_ig.es, k=10)
+    for i, e in enumerate(candidate_edges):
+        v1, v2 = e.tuple
+        comm1, comm2 = self.membership[v1], self.membership[v2]
+        if comm1 == comm2:
+            continue
+        self.membership[self.membership == comm1] = comm2
+        self.membership[self.membership == self.n_comms-1] = comm1
+        self.n_comms -= 1
+        break
+    */
 }
 
 Partition Partition::Mutate() {
+    if (FlipCoin()) {
+        // split a random community
+        igraph_integer_t comm_id_to_split = std::rand() % n_comms;
+        std::vector<size_t> indices_to_split_vector;
+        for (size_t i = 0; i < n_nodes; ++i) {
+            if (VECTOR(*_membership)[i] == comm_id_to_split) {
+                indices_to_split_vector.push_back(i);
+            }
+        }
+        igraph_vector_int_t indices_to_split;
+        igraph_vector_int_view(indices_to_split, indices_to_split_vector.data(), 
+                                                indices_to_split_vector.size());
+        if (igraph_vector_int_size(indices_to_split) > 2) {
+            size_t min_comm_size_newman = 10; // hardcoded value
+            if (igraph_vector_int_size(indices_to_split) > min_comm_size_newman) {
+                if (FlipCoin()) {
+                    NewmanSplit(indices_to_split, comm_id_to_split);
+                } else {
+                    RandomSplit(indices_to_split);
+                }
+            } else {
+                RandomSplit(indices_to_split);
+            }
+        } 
 
+    } else {
+        // randomly merge two connected communities 
+        size_t edges_subsample_size = 10; // hardcoded value
+    }
+}
+
+igraph_real_t GetFittness() const {
+    return _fittness;
+}
+
+//перенести функцию внутрб igraph либо переименовать под свой нейминг
+void igraph_vector_int_init_with(igraph_vector_int_t* v, size_t size, int fill) {
+    igraph_vector_int_init(v, size);
+    for (size_t i = 0; i < size; ++i) {
+        VECTOR(v)[i] = fill;
+    }
+}
+
+void GetVertexIdVector(const igraph_t* graph, igraph_vector_int_t* out) {
+    igraph_vit_t vit;
+    igraph_vit_create(graph, igraph_vss_all(), &vit);
+    igraph_vector_int_init(out, igraph_vcount(graph));
+    size_t i = 0;
+    while (!IGRAPH_VIT_END(vit)) {
+        VECTOR(out)[i] = IGRAPH_VIT_GET(vit);
+        IGRAPH_VIT_NEXT(vit);
+        i++;
+    }
+    igraph_vit_destroy(vit);
 }
 
 // есть некая вероятность, что нужен только igraph, потому что в igraph/src/community/leiden.c есть igraph_community_leiden,
 // и Гал использует именно его. Но, возможно, там медленнее, надо проверять
-void Partition::InitializePartition() {
+void Partition::InitializePartition(double sample_fraction) {
     igraph_t subgraph;
     if (FlipCoin()) {
         // sample nodes
-        auto subsample = chooser.RandomChoice(n_nodes, sample_size_nodes);
-        igraph_vector_int_t subsample_nodes_ids;
+        auto subsample = chooser.RandomChoice(n_nodes, sample_fraction*n_nodes);
+        igraph_vector_int_t subsample_nodes_ids; //это вьюшка, destroy не нужен
         igraph_vector_int_view(&subsample_nodes_ids, subsample.data(), subsample.size());
         igraph_induced_subgraph(_graph, &subgraph, igraph_vss_vector(&subsample_nodes_ids), 
-                                                    IGRAPH_SUBGRAPH_CREATE_FROM_SCRATCH);
+                                                    IGRAPH_SUBGRAPH_AUTO);
     } else {
         // sample edges
-        auto subsample = chooser.RandomChoice(n_edges, sample_size_edges);
-        igraph_vector_int_t subsample_edges_ids;
+        auto subsample = chooser.RandomChoice(n_edges, sample_fraction*n_edges);
+        igraph_vector_int_t subsample_edges_ids; //это вьюшка, destroy не нужен
         igraph_vector_int_view(&subsample_edges_ids, subsample.data(), subsample.size());
         igraph_subgraph_from_edges(_graph, &subgraph, igraph_ess_vector(&subsample_edges_ids), 
                                                                                     true);
     }
 
-    // Leiden algorithm on subgraph
-    // https://igraph.org/c/doc/igraph-Community.html#igraph_community_leiden
-    // igraph/examples/simple/igraph_community_leiden.c 
-
+    auto n_nodes_subgraph = igraph_vcount(&subgraph);
     igraph_vector_int_t node_weights;
-    igraph_vector_init(&node_weights, igraph_vcount(&subgraph));
+    igraph_vector_int_init(&node_weights, n_nodes_subgraph);
     igraph_degree(&subgraph, &node_weights, igraph_vss_all(), IGRAPH_ALL, true);
 
-    igraph_integer_t nb_clusters;
-    igraph_real_t quality;
+    igraph_vector_int_t subgraph_membership; 
+    igraph_vector_int_init(&subgraph_membership, n_nodes_subgraph);
     igraph_community_leiden(&subgraph, NULL, &node_weights, 1.0/(2*igraph_ecount(&subgraph)), 
-                            0.01, false, 2, _membership, &nb_clusters, &quality); //это настройки для того, чтобы objective function была modularity
+                    0.01, false, 2, &subgraph_membership, &n_comms, &_fittness); //это настройки для того, чтобы objective function была modularity
     
+    igraph_vector_int_destroy(&node_weights);
 
+    igraph_vector_int_t subgraph_vertices;
+    GetVertexIdVector(&subgraph, subgraph_vertices);
+    igraph_vector_int_init_with(&_membership, n_nodes, -1);
+    
+    for (size_t i = 0; i < n_nodes_subgraph; ++i) {
+        VECTOR(_membership)[VECTOR(subgraph_vertices)[i]] = VECTOR(subgraph_membership)[i];
+    }
 
+    igraph_vector_int_destroy(&subgraph_vertices);
+    igraph_vector_int_destroy(&subgraph_membership);
     igraph_destroy(&subgraph);
+
+    for (size_t i = 0; i < n_nodes; ++i) {
+        if (VECTOR(_membership)[i] == -1) {
+            VECTOR(_membership)[i] = n_comms++;
+        }
+    }
 }

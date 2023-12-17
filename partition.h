@@ -18,33 +18,33 @@
 
 class Partition {
  public:
-    Partition(igraph_t* G_ig, double sample_fraction=0.5, 
+    Partition(const igraph_t* G_ig, double sample_fraction=0.5, 
                 igraph_vector_int_t* init_partition=NULL);
 
     ~Partition();
 
     Partition Optimize();
 
-    void NewmanSplit(const vector<size_t>& indices, 
-        size_t /*практически уверена насчёт типа данных*/ comm_id_to_split);
-
-    void RandomSplit(const vector<size_t>& indices);
-
     Partition Mutate();
+
+    igraph_real_t GetFittness() const;
 
  private:
     const igraph_t* _graph;
     const int n_nodes;
     const int n_edges;
-    const int sample_size_nodes;
-    const int sample_size_edges;
-    igraph_vector_int_t* _membership;
+    igraph_vector_int_t _membership;
     int n_comms; //communities
-    double fittness;
+    igraph_real_t _fittness;
     RandomChooser chooser;
 
     //https://en.cppreference.com/w/cpp/numeric/random/discrete_distribution/discrete_distribution
 
-    void InitializePartition();
+    void InitializePartition(double sample_fraction);
 
+    void NewmanSplit(igraph_vector_int_t* indices, igraph_integer_t comm_id_to_split);
+
+    void RandomSplit(igraph_vector_int_t* indices);
+
+    void RandomMerge();
 };
