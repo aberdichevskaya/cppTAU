@@ -20,6 +20,7 @@ class Partition {
  public:
     Partition(const igraph_t* G_ig, double sample_fraction=0.5, 
                 igraph_vector_int_t* init_partition=NULL);
+   // нужны ли конструкторы копирования и перемещения? наверное нет, тут не нужно глубокое копирование
 
     ~Partition();
 
@@ -27,7 +28,9 @@ class Partition {
 
     Partition Mutate();
 
-    igraph_real_t GetFittness() const;
+    igraph_real_t GetFittness() const {
+      return _fittness;
+    }
 
  private:
     const igraph_t* _graph;
@@ -46,5 +49,5 @@ class Partition {
 
     void RandomSplit(igraph_vector_int_t* indices);
 
-    void RandomMerge();
+    void RandomMerge(size_t edges_subsample_size);
 };
