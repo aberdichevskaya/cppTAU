@@ -51,6 +51,7 @@ Partition Partition::Optimize() {
                     0.01, true, 3, &_membership, &n_comms, &_fittness);
     
     igraph_vector_int_destroy(&node_weights);
+    return this;
 }
 
 //Newman  O(|E|+|V|^2*steps)
