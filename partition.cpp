@@ -10,6 +10,10 @@
 
 // проверить, вдруг алгоритм leiden быстрее в libleidenalg TODO
 
+// не использовать VECTOR, а просто тыкать stor_begin, наверное это быстрее TODO
+// то же самое касается всех макросов для итераторов
+// for (double *ptr = vec.stor_begin; ptr != vec.end; ++ptr) { ... } - но авторы igraph не ракомендуют так делать, мол библиотека и поменяться может
+
 bool FlipCoin() {
     return static_cast<double>(std::rand()) / RAND_MAX > 0.5;
 }

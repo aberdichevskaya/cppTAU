@@ -3,8 +3,10 @@
 #include "igraph/include/igraph.h"
 
 #include "partition.h"
+#include "random_chooser.h"
 
 #include <vector>
+#include <random>
 
 class GeneticAlgorithm {
  public:
@@ -24,6 +26,9 @@ class GeneticAlgorithm {
  private:
     void CalculateProbabilities(uint32_t selection_power);
     std::vector<Partition> CreatePopulation(size_t population_size=this->population_size) const;
+    Partition SingleCrossover(size_t idx1, size_t idx2) const;
+    std::vector<Partition> PopulationCrossover() const;
+
 
     const igraph_t* _graph;
     const size_t population_size;
@@ -31,10 +36,15 @@ class GeneticAlgorithm {
     const size_t n_workers;
     const size_t n_elite;
     const size_t n_immigrants;
+    const size_t n_offspring;
     std::vector<double> probs;
     const size_t stopping_criterion_generations;
     const double stopping_criterion_jaccard;
     const double elite_similarity_threshold;
 
-    std::vector<Partition> population; 
+    std::vector<Partition> _population; 
+
+    RandomChooser chooser;
+
+    std::discrete_distribution dis;
 };

@@ -32,6 +32,10 @@ class Partition {
       return _fittness;
     }
 
+    const igraph_vector_int_t* GetMembership() const { // точно const?
+      return &_membership;
+    }
+
  private:
     const igraph_t* _graph;
     const int n_nodes;
@@ -40,8 +44,6 @@ class Partition {
     int n_comms; //communities
     igraph_real_t _fittness;
     RandomChooser chooser;
-
-    //https://en.cppreference.com/w/cpp/numeric/random/discrete_distribution/discrete_distribution
 
     void InitializePartition(double sample_fraction);
 

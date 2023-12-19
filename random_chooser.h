@@ -2,6 +2,7 @@
 // choice может быть const? скорее нет, потому что генератор передаётся в shuffle по &&
 
 // может поменять тут вектора на igraph_vector? всё равно вроде только для него использовать TODO
+// в целом по возможности уходить от stl к сишным вещам, так быстрее TODO
 
 #pragma once
 
@@ -39,6 +40,7 @@ std::vector<T> RandomChooser::RandomChoice(const std::vector<T> &elements, int s
     return {shuffled.begin(), shuffled.begin() + size};
 }
 
+// попробовать просто брать случайный шаг
 
 template <typename Distribution = std::uniform_int_distribution<std::size_t>>
     std::vector<int> RandomChoice(int max_value, int size, 
