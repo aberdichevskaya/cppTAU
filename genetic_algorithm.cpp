@@ -6,6 +6,21 @@
 #include <iostream>
 #include <unordered_map>
 
+std::vector<double> CalculateProbabilities(uint32_t selection_power, size_t population_size) {
+    std::vector<double> probs(population_size);
+    std::vector<int64_t> values(population_size);
+    std::iota(values.rbegin(), values.rend(), 1);
+    int64_t denom = 0;
+    for (auto& value : values) {
+        value = binpow(value, selection_power);
+        denom += value;
+    }
+    for (int i = 0; i < population_size; ++i) {
+        probs[i] = static_cast<double>(values[i]) / denom;
+    }
+    return probs;
+}
+
 GeneticAlgorithm::GeneticAlgorithm(igraph_t* graph, 
                    size_t population_size,
                    size_t max_generations, 
@@ -26,10 +41,8 @@ GeneticAlgorithm::GeneticAlgorithm(igraph_t* graph,
     , stopping_criterion_jaccard(stopping_criterion_jaccard)
     , elite_similarity_threshold(elite_similarity_threshold) {
         this->_graph = graph;
-        CalculateProbabilities(selection_power);
-        dis = std::discrete_distribution(probs); //TODO probs вообще нет смысла хранить, можно сразу dist делать в функции выше
-        // но работает ли для него оператор присваивания? с другой стороны, его можно конструировать прямо в вызове
-        // RandomChoice, но держать его полем как будто бы эффективнее
+        auto probs = CalculateProbabilities(selection_power, population_size);
+        dis = std::discrete_distribution<size_t>(probs.begin(), probs.end());
         std::cout << "Main parameter values: pop_size = " << population_size << 
             ", workers = " << n_workers << ", max_generations = " << max_generations << "\n";
 }
@@ -46,20 +59,6 @@ int64_t binpow(int64_t x, int32_t a) {
     return res;
 }
 
-void GeneticAlgorithm::CalculateProbabilities(uint32_t selection_power) {
-    probs.resize(population_size);
-    std::vector<int64_t> values(population_size);
-    std::iota(values.rbegin(), values.rend(), 1);
-    int64_t denom = 0;
-    for (auto& value : values) {
-        value = binpow(value, selection_power);
-        denom += value;
-    }
-    for (int i = 0; i < population_size; ++i) {
-        probs[i] = static_cast<double>(values[i]) / denom;
-    }
-}
-
 std::vector<Partition> GeneticAlgorithm::CreatePopulation(size_t population_size) const {
     std::mt19937 gen(std::random_device());
     std::uniform_real_distribution<double> dis(0.2, 0.9); //вынести это в поля? или сделать метод статическим?
@@ -72,8 +71,9 @@ std::vector<Partition> GeneticAlgorithm::CreatePopulation(size_t population_size
 }
 
 void overlap(const igraph_vector_int_t* membership1, 
-                     const igraph_vector_int_t* membership1,
+                     const igraph_vector_int_t* membership2,
                      igraph_vector_int_t* consensus) {
+    // протестировала, вроде работает
     igraph_vector_int_update(consensus, membership1); //точно ли надо делать глубокое копирование. TODO проверить, нужен ли потом ещё membership старого разбиения
     unordered_map<igraph_integer_t, igraph_integer_t> consensus_values;
     igraph_integer_t comm = 0;

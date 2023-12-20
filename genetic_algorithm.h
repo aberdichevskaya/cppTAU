@@ -24,7 +24,6 @@ class GeneticAlgorithm {
     void /*вообще-то нужен явно не войд*/ Run(); /*альтернативное название - FindPartition*/
 
  private:
-    void CalculateProbabilities(uint32_t selection_power);
     std::vector<Partition> CreatePopulation(size_t population_size=this->population_size) const;
     Partition SingleCrossover(size_t idx1, size_t idx2) const;
     std::vector<Partition> PopulationCrossover() const;
@@ -37,7 +36,6 @@ class GeneticAlgorithm {
     const size_t n_elite;
     const size_t n_immigrants;
     const size_t n_offspring;
-    std::vector<double> probs;
     const size_t stopping_criterion_generations;
     const double stopping_criterion_jaccard;
     const double elite_similarity_threshold;
@@ -46,5 +44,5 @@ class GeneticAlgorithm {
 
     RandomChooser chooser;
 
-    std::discrete_distribution dis;
+    std::discrete_distribution<size_t> dis;
 };
