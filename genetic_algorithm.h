@@ -27,7 +27,7 @@ class GeneticAlgorithm {
     std::vector<Partition> CreatePopulation(size_t population_size=this->population_size) const;
     Partition SingleCrossover(size_t idx1, size_t idx2) const;
     std::vector<Partition> PopulationCrossover() const;
-
+    std::vector<size_t> EliteSelection() const;
 
     const igraph_t* _graph;
     const size_t population_size;

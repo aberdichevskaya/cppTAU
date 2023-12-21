@@ -6,6 +6,8 @@
 #include <iostream>
 #include <unordered_map>
 
+// нужно взвесить, насколько мне действительно нужен отдельный RandomChooser
+
 std::vector<double> CalculateProbabilities(uint32_t selection_power, size_t population_size) {
     std::vector<double> probs(population_size);
     std::vector<int64_t> values(population_size);
@@ -61,7 +63,7 @@ int64_t binpow(int64_t x, int32_t a) {
 
 std::vector<Partition> GeneticAlgorithm::CreatePopulation(size_t population_size) const {
     std::mt19937 gen(std::random_device());
-    std::uniform_real_distribution<double> dis(0.2, 0.9); //вынести это в поля? или сделать метод статическим?
+    std::uniform_real_distribution<double> dis(0.2, 0.9); //вынести это в поля? 
     std::vector<Partition> population(population_size);
     //это должно быть параллельным TODO
     for (size_t i = 0; i < population_size; ++i) {
@@ -70,7 +72,7 @@ std::vector<Partition> GeneticAlgorithm::CreatePopulation(size_t population_size
     return population;
 }
 
-void overlap(const igraph_vector_int_t* membership1, 
+void overlap(const igraph_vector_int_t* membership1,  // не сделать ли эту функцию статическим методом, причем наверное даже не geneticalgorithm, а partition? TODO 
                      const igraph_vector_int_t* membership2,
                      igraph_vector_int_t* consensus) {
     // протестировала, вроде работает
@@ -123,12 +125,152 @@ std::vector<Partition> GeneticAlgorithm::PopulationCrossover() const {
                                                     indices_to_cross[i].second);
         }
         crossed_offspring.insert(crossed_offspring.back(), as_is_offspring.begin(),
-                                    as_is_offspring.end()); //TODO move_iterator?
+                                    as_is_offspring.end()); //TODO std::make_move_iterator?
         // мне не то чтобы нравится такое переиспользование crossed_offspring, но без move пока так
         return crossed_offspring;
     }
 }
 
-// мне не кажется адекватной идея использовать расстояние жаккара. chatgpt считает, что лучше брать
-// метрики ARI и NMI. нужно попытаться понять, почему Гал решил использовать Жаккара, и точно
-// ли эти 2 лучше
+
+// Жаккар проще для понимания, О(1) памяти. Ассимптотика О(n^2)
+// ARI сложнее, O(k^2), ассимптотика O(n^2), но оптимизируется до O(nk) или O(n). Точнее и чувствительнее
+// TODO сравнить их на практике и выбрать оптимальный
+// либо добавить пользователю возможность выбирать, но это чёт сложно
+// TODO оба индекса хорошо параллелятся. Хотя в этом не особо есть смысл, это будет вложенная параллелизация
+inline double comb2(int n) {
+    return static_cast<double>(n) * (n - 1) / 2.0;
+}
+
+// Функция для вычисления ARI 
+double ComputePartitionSimilarityARI(const igraph_vector_int_t* membership1, 
+                                const igraph_vector_int_t* membership2) { //static метод Partition или GeneticAlgorithm? TODO
+    size_t n = igraph_vector_int_size(membership1);
+    std::unordered_map<igraph_integer_t, int32_t> count_membership1, count_membership2;
+    std::unordered_map<std::pair<igraph_integer_t, igraph_integer_t>, int32_t> count_joint;
+
+    for (size_t i = 0; i < n; ++i) {
+        igraph_integer_t membership1_i = membership1->stor_begin[i];
+        igraph_integer_t membership2_i = membership2->stor_begin[i];
+        count_membership1[membership1_i]++;
+        count_membership2[membership2_i]++;
+        count_joint[{membership1_i, membership2_i}]++;
+    }
+
+    double sum_comb_memb1 = 0, sum_comb_memb2 = 0, sum_comb_joint = 0;
+    for (const auto& el : count_membership1) {
+        sum_comb_memb1 += comb2(el.second);
+    }
+    for (const auto& el : count_membership2) {
+        sum_comb_memb2 += comb2(el.second);
+    }
+    for (const auto& el : count_joint) { //вот тут может вылезти O(n^2)
+        sum_comb_joint += comb2(el.second);
+    }
+
+    double index = (sum_comb_joint - (sum_comb_memb1 * sum_comb_memb2) / comb2(n)) / ((sum_comb_memb1 + sum_comb_memb2) / 2 - (sum_comb_memb1 * sum_comb_memb2) / comb2(n));
+    return index;
+}
+
+double ComputePartitionSimilarityJaccard(const igraph_vector_int_t* membership1, 
+                                const igraph_vector_int_t* membership2) {
+    int a = 0, c = 0, d = 0;
+    size_t n = igraph_vector_int_size(membership1);
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            bool in_same_cluster_1 = membership1->stor_begin[i] == membership1->stor_begin[j];
+            bool in_same_cluster_2 = membership2->stor_begin[i] == membership2->stor_begin[j];
+            if (in_same_cluster_1 && in_same_cluster_2) {
+                a++;
+            } else if (in_same_cluster_1 || in_same_cluster_2) {
+                c++;
+            } else {
+                d++;
+            }
+        }
+    }
+    double jac = static_cast<double>(a) / (a + c + d);
+    return jac;
+}
+
+
+std::vector<size_t> GeneticAlgorithm::EliteSelection() const {
+// пока вообще без оптимизаций
+// TODO возможные оптимизации: параллельность; проверка, что не происходит повторное пересчитывание similarity
+// для одной и той же пары разбиений; ограничение на количество итераций (и опция докинуть просто случайные разбиения в элиту)
+    std::vector<size_t> elite_indices = {0}; // starting with an assumption that [0] is already an elite (because population is sorted)
+    size_t candidate_index = 1; // element index to start checking
+    while (elite_indices.size() < n_elite && candidate_idx < _population.size()) {
+        bool is_elite = true;
+        for (auto elite_idx : elite_indices) {
+            double similarity =  ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
+                                    _population[elite_idx].GetMembership(),
+                                    _population[candidate_idx].GetMembership()); 
+            if (similarity > similarity_threshold) {
+                is_elite = false;
+                break;
+            }
+        }
+        if (is_elite) {
+            elite_indices.push_back(candidate_idx);
+        }
+        candidate_idx++;
+    }
+    return elite_idx;
+}
+
+std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
+    std::vector<double> best_modularity_per_generation; //неплохо бы сколько-то зарезервировать, но сколько?
+    int32_t cnt_convergence = 0;
+    std::vector<igraph_integer_t> last_best_partition;
+    last_best_partition.reserve(igraph_vcount(_graph));
+    
+    _population = CreatePopulation(population_size);
+    for (int32_t generation_i = 1; generation_i <= max_generations; ++generation_i) {
+        // TODO добавить замер времени
+        for (auto& indiv : _population) { // TODO распараллелить
+            indiv.Optimize();
+        }
+
+        std::stable_sort(std::execution::parallel_policy, _population.begin(), _population.end());
+        // не то чтобы параллельная сортировка очень нужна, популяция маленькая, так что надо проверять TODO
+
+        Partition best_indiv = _population[0];
+
+        if (last_best_memb.size()) {
+            double sim_to_last_best = ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
+                                    best_indiv.GetMembership(), last_best_memb);
+            if (sim_to_last_best > stopping_criterion_jaccard) {
+                cnt_convergence++;
+            } else {
+                cnt_convergence = 0;
+            }
+        }
+        last_best_memb = best_indiv.GetMembership();
+        if (cnt_convergence == stopping_criterion_generations || generation_i == max_generations) {
+            break;
+        }
+
+        std::vector<size_t> elite_indices = EliteSelection();
+        std::vector<Partition> elite(n_elite);
+        for (size_t idx : elite_indices) {
+            elite[i] = _population[idx];
+        }
+
+        // TODO parallel
+        std::vector<Partition> offsprings = PopulationCrossover();
+        for (auto& offspring : offsprings) {
+            offspring.Mutate();
+        }
+
+        std::vector<Partition> immigrants = CreatePopulation(n_immigrants);
+
+        // опять же, параллельность не то чтобы очень оправдана, но компилятор должен уметь самостоятельно принять это решение
+        std::copy(std::execution::parallel_policy, std::make_move_iterator(elite.begin()), 
+                                std::make_move_iterator(elite.end()), _population.begin());
+        std::copy(std::execution::parallel_policy, std::make_move_iterator(immigrants.begin()), 
+            std::make_move_iterator(immigrants.end()), _population.begin() + n_elite);
+        std::copy(std::execution::parallel_policy, std::make_move_iterator(offspring.begin()), 
+            std::make_move_iterator(offspring.end()), _population.begin() + n_elite + n_immigrants);
+        
+    }
+}
