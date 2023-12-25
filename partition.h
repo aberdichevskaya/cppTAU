@@ -1,6 +1,6 @@
 #pragma once
 
-#include "random_chooser"
+#include "random_chooser.h"
 #include "igraph/include/igraph.h"
 
 #include <ctime>
@@ -19,9 +19,9 @@
 class Partition {
  public:
     Partition(const igraph_t* G_ig, double sample_fraction=0.5, 
-                igraph_vector_int_t* init_partition=NULL);
+                const igraph_vector_int_t* init_partition=NULL);
    // нужны ли конструкторы копирования и перемещения? наверное нет, тут не нужно глубокое копирование
-
+   // точно нужен operator=
     ~Partition();
 
     Partition Optimize();

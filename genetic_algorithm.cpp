@@ -1,7 +1,7 @@
 #include "genetic_algorithm.h"
 
-#include <execution>
-#include <algorithms>
+//#include <execution>
+#include <algorithm>
 #include <thread>
 #include <iostream>
 #include <unordered_map>
@@ -26,25 +26,32 @@ std::vector<double> CalculateProbabilities(uint32_t selection_power, size_t popu
 GeneticAlgorithm::GeneticAlgorithm(igraph_t* graph, 
                    size_t population_size,
                    size_t max_generations, 
-                   size_t n_workers,
+                   int32_t n_workers,
                    uint32_t selection_power, 
                    double p_elite, 
                    double p_immigrants, 
                    size_t stopping_criterion_generations,
                    double stopping_criterion_jaccard, 
                    double elite_similarity_threshold)
-    : population_size(max(population_size, 10)) //почему 10?
+    : population_size(std::max(population_size, 10)) //почему 10?
     , max_generations(max_generations)
-    , n_workers(min({std::thread::hardware_concurrency(), population_size, n_workers})) 
     , n_elite(p_elite*population_size)
     , n_immigrants(n_immigrants*population_size)
     , n_offspring(population_size-n_elite-n_immigrants)
     , stopping_criterion_generations(stopping_criterion_generations)
     , stopping_criterion_jaccard(stopping_criterion_jaccard)
     , elite_similarity_threshold(elite_similarity_threshold) {
+        if (n_workers == -1) {
+            this->n_workers = std::min(std::thread::hardware_concurrency(), population_size);
+        } else {
+            this->n_workers = std::min({std::thread::hardware_concurrency(), 
+                                        population_size, 
+                                        n_workers}, [](uint32_t a, uint32_t b) {
+                                            return a < b;
+                                        }));
+        }
         this->_graph = graph;
-        auto probs = CalculateProbabilities(selection_power, population_size);
-        dis = std::discrete_distribution<size_t>(probs.begin(), probs.end());
+        probs = CalculateProbabilities(selection_power, population_size);
         std::cout << "Main parameter values: pop_size = " << population_size << 
             ", workers = " << n_workers << ", max_generations = " << max_generations << "\n";
 }
@@ -77,7 +84,7 @@ void overlap(const igraph_vector_int_t* membership1,  // не сделать л�
                      igraph_vector_int_t* consensus) {
     // протестировала, вроде работает
     igraph_vector_int_update(consensus, membership1); //точно ли надо делать глубокое копирование. TODO проверить, нужен ли потом ещё membership старого разбиения
-    unordered_map<igraph_integer_t, igraph_integer_t> consensus_values;
+    std::unordered_map<igraph_integer_t, igraph_integer_t> consensus_values;
     igraph_integer_t comm = 0;
     // TODO распараллелить
     for (size_t i = 0; i < igraph_vector_int_size(membership1); ++i) {
@@ -98,36 +105,36 @@ Partition GeneticAlgorithm::SingleCrossover(size_t idx1, size_t idx2) const {
     igraph_vector_int_t partitions_overlap;
     igraph_vector_int_init(&partitions_overlap, igraph_vector_int_size(membership1));
     overlap(membership1, membership2, &partitions_overlap);
-    Partition offspring(_graph, 0.5, partitions_overlap);
+    Partition offspring(_graph, 0.5, &partitions_overlap);
     return offspring;
 }
 
 std::vector<Partition> GeneticAlgorithm::PopulationCrossover() const {
     //почему некоторые потомки остаются as_is? TO ASK
     std::vector<std::pair<size_t, size_t>> indices_to_cross;
-    std::vector<Partition> as_is_offspring;
+    std::vector<Partition> as_is_offsprings;
     indices_to_cross.reserve(n_offspring);
     as_is_offsprings.reserve(n_offspring);
 
     for (uint32_t i = 0; i < n_offspring; ++i) {
-        auto indices = chooser.RandomChoice(population_size, 2, dis);
+        auto indices = chooser.RandomChoice(population_size, 2, probs);
         if (FlipCoin()) {
             indices_to_cross.push_back({indices[0], indices[1]});
         } else {
-            as_is_offsprings.push_back(population[indices[0]]); //не нравится мне то, что здесь indices[1] просто игнорируются
+            as_is_offsprings.push_back(_population[indices[0]]); //не нравится мне то, что здесь indices[1] просто игнорируются
             // +может быть стоит мувать, чтобы там membership'ы не копировались
             // так или иначе, лучше у партишенов конструкторы копирования/перемещения написать TODO
         }
         std::vector<Partition> crossed_offsprings(indices_to_cross.size());
         //TODO распараллелить
         for (size_t i = 0; i < indices_to_cross.size(); ++i) {
-            crossed_offspring[i] = SingleCrossover(indices_to_cross[i].first, 
+            crossed_offsprings[i] = SingleCrossover(indices_to_cross[i].first, 
                                                     indices_to_cross[i].second);
         }
-        crossed_offspring.insert(crossed_offspring.back(), as_is_offspring.begin(),
-                                    as_is_offspring.end()); //TODO std::make_move_iterator?
+        crossed_offsprings.insert(crossed_offsprings.back(), as_is_offsprings.begin(),
+                                    as_is_offsprings.end()); //TODO std::make_move_iterator?
         // мне не то чтобы нравится такое переиспользование crossed_offspring, но без move пока так
-        return crossed_offspring;
+        return crossed_offsprings;
     }
 }
 
@@ -198,14 +205,14 @@ std::vector<size_t> GeneticAlgorithm::EliteSelection() const {
 // TODO возможные оптимизации: параллельность; проверка, что не происходит повторное пересчитывание similarity
 // для одной и той же пары разбиений; ограничение на количество итераций (и опция докинуть просто случайные разбиения в элиту)
     std::vector<size_t> elite_indices = {0}; // starting with an assumption that [0] is already an elite (because population is sorted)
-    size_t candidate_index = 1; // element index to start checking
+    size_t candidate_idx = 1; // element index to start checking
     while (elite_indices.size() < n_elite && candidate_idx < _population.size()) {
         bool is_elite = true;
         for (auto elite_idx : elite_indices) {
             double similarity =  ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
                                     _population[elite_idx].GetMembership(),
                                     _population[candidate_idx].GetMembership()); 
-            if (similarity > similarity_threshold) {
+            if (similarity > elite_similarity_threshold) {
                 is_elite = false;
                 break;
             }
@@ -231,10 +238,14 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
             indiv.Optimize();
         }
 
-        std::stable_sort(std::execution::parallel_policy, _population.begin(), _population.end());
+        std::stable_sort(/*std::execution::parallel_policy,*/ _population.begin(), _population.end(),
+                            [](const Partition &a, const Partition &b) {
+                                return a.GetFittness() > b.GetFittness();
+                            });
         // не то чтобы параллельная сортировка очень нужна, популяция маленькая, так что надо проверять TODO
 
         Partition best_indiv = _population[0];
+        double best_score = best_indiv.GetFittness();
 
         if (last_best_memb.size()) {
             double sim_to_last_best = ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
@@ -265,12 +276,13 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
         std::vector<Partition> immigrants = CreatePopulation(n_immigrants);
 
         // опять же, параллельность не то чтобы очень оправдана, но компилятор должен уметь самостоятельно принять это решение
-        std::copy(std::execution::parallel_policy, std::make_move_iterator(elite.begin()), 
+        std::copy(/*std::execution::parallel_policy, */std::make_move_iterator(elite.begin()), 
                                 std::make_move_iterator(elite.end()), _population.begin());
-        std::copy(std::execution::parallel_policy, std::make_move_iterator(immigrants.begin()), 
+        std::copy(/*std::execution::parallel_policy, */std::make_move_iterator(immigrants.begin()), 
             std::make_move_iterator(immigrants.end()), _population.begin() + n_elite);
-        std::copy(std::execution::parallel_policy, std::make_move_iterator(offspring.begin()), 
-            std::make_move_iterator(offspring.end()), _population.begin() + n_elite + n_immigrants);
+        std::copy(/*std::execution::parallel_policy, */std::make_move_iterator(offsprings.begin()), 
+            std::make_move_iterator(offsprings.end()), _population.begin() + n_elite + n_immigrants);
         
+        std::cout << "Generation " << generation_i << ". Best score: " << best_score << "\n";
     }
 }
