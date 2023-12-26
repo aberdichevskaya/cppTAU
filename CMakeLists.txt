@@ -8,6 +8,7 @@ set(SOURCES
     main.cpp
     partition.cpp
     genetic_algorithm.cpp
+    random_chooser.cpp
 )
 
 

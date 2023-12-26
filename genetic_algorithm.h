@@ -10,10 +10,10 @@
 
 class GeneticAlgorithm {
  public:
-    GeneticAlgorithm(igraph_t* graph, 
+    GeneticAlgorithm(const igraph_t* graph, 
                    size_t population_size,
                    size_t max_generations,
-                   int32_t n_workers=-1, 
+                   size_t n_workers, 
                    uint32_t selection_power=5, 
                    double p_elite=0.1, 
                    double p_immigrants=0.15, 
@@ -24,7 +24,7 @@ class GeneticAlgorithm {
     std::pair<Partition, std::vector<double>> Run(); /*альтернативное название - FindPartition*/
 
  private:
-    std::vector<Partition> CreatePopulation(size_t population_size) const;
+    void CreatePopulation(std::vector<Partition> &population) const;
     Partition SingleCrossover(size_t idx1, size_t idx2) const;
     std::vector<Partition> PopulationCrossover() const;
     std::vector<size_t> EliteSelection() const;
@@ -32,7 +32,7 @@ class GeneticAlgorithm {
     const igraph_t* _graph;
     const size_t population_size;
     const size_t max_generations; 
-    const size_t n_workers;
+    size_t n_workers;
     const size_t n_elite;
     const size_t n_immigrants;
     const size_t n_offspring;

@@ -14,10 +14,6 @@
 int main(int argc, char* argv[]) {
     std::srand(std::time(0));
 
-    //чтение графов есть в igraph/src/io. Например, igraph_read_graph_edgelist. как быть с тем, что могут быть разные форматы файлов - пока не знаю
-    // но в коде Гала вроде как может читаться только список смежности (из любого файла)
-    // он использует функцию из nx, а потом уже преобразует это в igraph
-
     argparse::ArgumentParser program("cppTAU");
     program.add_argument("--graph")
         .required()
@@ -26,7 +22,7 @@ int main(int argc, char* argv[]) {
         .default_value(60)
         .help("size of population; default is 60.");
     program.add_argument("--workers")
-        .default_value(-1) //это тупа какое-то слишком большое значение, мб можно поэлегантнее придумать
+        .default_value(0) 
         .help("number of workers; default is number of available CPUs.");
     program.add_argument("--max_generations")
         .default_value(500)
@@ -40,19 +36,18 @@ int main(int argc, char* argv[]) {
         std::exit(1);
     }
 
-    auto file_path = program.get<char*>("--graph");
-    FILE *file = fopen(file_path, "r");
+    auto file_path = program.get<std::string>("--graph");
+    FILE *file = fopen(file_path.c_str(), "r");
     igraph_t graph;
     igraph_read_graph_edgelist(&graph, file, 0, false);
     fclose(file);
 
     GeneticAlgorithm algorithm(&graph, 
-                   program.get<size_t>("--size"),
-                   program.get<size_t>("--max_generations"),
-                   program.get<int32_t>("--workers"));
+                   program.get<int>("--size"),
+                   program.get<int>("--max_generations"),
+                   program.get<int>("--workers"));
     auto res = algorithm.Run();
-
-
+    std::cout << "6\n";
 
     return 0;
 }

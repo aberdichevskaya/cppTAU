@@ -3,7 +3,10 @@
 #include "partition.h"
 #include "random_chooser.h"
 
-#include <set>
+#include <unordered_set>
+#include <algorithm>
+#include <random>
+#include <iostream>
 
 // всякие перкладывания значений из одного вектора в другой точно надо параллелить TODO
 // хотя и возникнет много вложенной параллелизации, которой нет
@@ -14,48 +17,101 @@
 // то же самое касается всех макросов для итераторов
 // for (double *ptr = vec.stor_begin; ptr != vec.end; ++ptr) { ... } - но авторы igraph не ракомендуют так делать, мол библиотека и поменяться может
 
-bool FlipCoin() {
-    return static_cast<double>(std::rand()) / RAND_MAX > 0.5;
+static inline bool FlipCoin() {
+    static std::mt19937 engine(std::random_device{}());
+    static std::bernoulli_distribution distribution(0.5);
+    return distribution(engine);
 }
 
 size_t UniqueCnt(const igraph_vector_int_t* v) {
-    set<int> cnt; // не int, а что там у них
+    std::unordered_set<int64_t> cnt;
     for (size_t i = 0; i < igraph_vector_int_size(v); ++i) {
-        cnt.insert(VECTOR(v)[i]);
+        cnt.insert(v->stor_begin[i]);
     }
     return cnt.size();
 }
 
-Partition::Partition(igraph_t* graph, double sample_fraction,
+Partition::Partition(const igraph_t* graph, double sample_fraction,
                     const igraph_vector_int_t* init_partition) 
   : n_nodes(igraph_vcount(graph))
-  , n_edges(igraph_ecount(graph)) {
+  , n_edges(igraph_ecount(graph))
+  , membership_is_inialized(false) {
     this->_graph = graph; //destroy only in main()
     if (init_partition == NULL) {
         InitializePartition(sample_fraction);
     } else {
-        igraph_vector_int_update(&_membership, init_partition);
+        igraph_vector_int_init_copy(&_membership, init_partition);
+        membership_is_inialized = true;
         n_comms = UniqueCnt(&_membership);
     }
 }
 
-Partition::~Partition() {
-    delete this->_graph;
-    igraph_vector_int_destroy(&_membership);
+Partition::Partition() 
+    : n_nodes(0)
+    , n_edges(0)
+    , membership_is_inialized(false)
+    , _graph(NULL) {}
+
+
+Partition& Partition::operator=(const Partition& p) {
+    // if (this != &p) { было бы неплохо, но это же ещё оператор != писать
+    std::cout << "partition operator= 1\n";
+    n_nodes = p.n_nodes;
+    n_edges = p.n_edges;
+    n_comms = p.n_comms;
+    std::cout << "partition operator= 2\n";
+    _fittness = p._fittness;
+    std::cout << "partition operator= 3\n";
+    if (!membership_is_inialized) {
+        std::cout << "partition operator= 4\n";
+        igraph_vector_int_init(&_membership, n_nodes);
+        membership_is_inialized = true;
+        std::cout << "partition operator= 5\n";
+    } 
+    std::cout << "partition operator= 6\n";
+    igraph_vector_int_update(&_membership, &p._membership);
+    std::cout << "partition operator= 7\n";
+    _graph = p._graph;
+    std::cout << "partition operator= 8\n";
+    chooser = p.chooser;
+    std::cout << "partition operator= 9\n";
+    return *this;
 }
 
-Partition Partition::Optimize() {
-    igraph_vector_int_t node_weights; // сделать полем класса, 
-    // чтобы не аллоцировать память каждый раз? пока не очень понимаю, 
-    // сколько раз вызывается для 1 объекта. если больше 1, то имеет смысл TODO
-    igraph_vector_int_init(&node_weights, n_nodes);
-    igraph_degree(_graph, &node_weights, igraph_vss_all(), IGRAPH_ALL, true);
+Partition::~Partition() {
+    std::cout << "partition destructor 1\n";
+    /*
+    A likely cause is writing beyond the end of an allocated buffer.
+    It typically occurs when the free() function is called on a memory block that has been modified or corrupted after allocation, possibly due to a buffer overflow, double free, or similar issues. 
+    Debugging tools like Valgrind or AddressSanitizer can help identify the source of such issues.
+    */
+    if (membership_is_inialized) {
+        igraph_vector_int_destroy(&_membership);
+        membership_is_inialized = false;
+    }
+    std::cout << "partition destructor 2\n";
+}
+
+void get_node_weights_for_modularity(const igraph_t* graph, igraph_vector_t* node_weights) {
+    size_t n_nodes = igraph_vcount(graph);
+    igraph_vector_int_t node_degrees; 
+    igraph_vector_int_init(&node_degrees, n_nodes);
+    igraph_degree(graph, &node_degrees, igraph_vss_all(), IGRAPH_ALL, IGRAPH_LOOPS);
+    igraph_vector_init(node_weights, n_nodes);
+    for (size_t i = 0; i < n_nodes; ++i) {
+        node_weights->stor_begin[i] = node_degrees.stor_begin[i];
+    }
+    igraph_vector_int_destroy(&node_degrees);
+}
+
+void Partition::Optimize() {
+    igraph_vector_t node_weights; // сделать полем класса? TODO
+    get_node_weights_for_modularity(_graph, &node_weights);
 
     igraph_community_leiden(_graph, NULL, &node_weights, 1.0/(2*n_edges), 
                     0.01, true, 3, &_membership, &n_comms, &_fittness);
     
-    igraph_vector_int_destroy(&node_weights);
-    return this;
+    igraph_vector_destroy(&node_weights);
 }
 
 //Newman  O(|E|+|V|^2*steps)
@@ -69,12 +125,12 @@ void Partition::NewmanSplit(igraph_vector_int_t* indices, igraph_integer_t comm_
     igraph_community_leading_eigenvector(&subgraph, NULL, NULL, subgraph_membership, 5 /*steps ?*/, 
                                         NULL, NULL, false, NULL, NULL, NULL, NULL, NULL);
     for (size_t i = 0; i < igraph_vector_int_size(subgraph_membership); ++i) {
-        VECTOR(subgraph_membership)[i] = VECTOR(*subgraph_membership)[i] == 0 ? comm_id_to_split : n_comms;
+        subgraph_membership->stor_begin[i] = subgraph_membership->stor_begin[i] == 0 ? comm_id_to_split : n_comms;
     }
     
     for (size_t i = 0, j = 0; i < n_nodes; ++i) {
-        if (VECTOR(_membership)[i] == comm_id_to_split) {
-            VECTOR(_membership)[i] = VECTOR(*subgraph_membership)[j];
+        if (_membership.stor_begin[i] == comm_id_to_split) {
+            _membership.stor_begin[i] = subgraph_membership->stor_begin[j];
             j++;
         }
     }
@@ -84,31 +140,32 @@ void Partition::NewmanSplit(igraph_vector_int_t* indices, igraph_integer_t comm_
 
 
 void Partition::RandomSplit(igraph_vector_int_t* indices) {
-    size_t size_to_split = max(1, (std::rand() % igraph_vector_int_size(indices))/2); // у Гала тут почему-то min, но выглядит как ошибка
+    size_t size_to_split = std::max(size_t(1), size_t((std::rand() % igraph_vector_int_size(indices))/2)); // у Гала тут почему-то min, но выглядит как ошибка и нужно на самом деле max. но при этом я не уверена, что так вообще останутся связанные компоненты
     std::vector<size_t> indices_vector(igraph_vector_int_size(indices));
     for (size_t i = 0; i < indices_vector.size(); ++i) {
-        indices_vector[i] = VECTOR(*indices)[i];
+        indices_vector[i] = indices->stor_begin[i];
     }
     std::vector<size_t> indices_to_split = chooser.RandomChoice(indices_vector, size_to_split);
     for (const auto i : indices_to_split) {
-        VECTOR(_membership)[i] = n_comms;
+        _membership.stor_begin[i] = n_comms;
     }
-    /*это ошибка, 
-    и нужно на самом деле max. но при этом я не уверена, что так вообще 
-    останутся связанные компоненты
-    */
     n_comms++;
 }
 
+void copy_vector(igraph_vector_int_t* to, const std::vector<int32_t> &from) {
+    igraph_vector_int_init(to, from.size());
+    for (size_t i = 0; i < from.size(); ++i) {
+        to->stor_begin[i] = from[i];
+    }
+}
 
 void Partition::RandomMerge(size_t edges_subsample_size) {
     std::vector<int> candidate_edges_ids_vector = chooser.RandomChoice(n_edges, 
                                                          edges_subsample_size);
     igraph_vector_int_t candidate_edges_ids;
-    igraph_vector_int_view(&candidate_edges_ids, candidate_edges_ids_vector.data(),
-                                candidate_edges_ids_vector.size());
+    copy_vector(&candidate_edges_ids, candidate_edges_ids_vector);
     igraph_eit_t candidate_edges;
-    igraph_eit_create(_graph, igraph_ess_vector(candidate_edges_ids), &candidate_edges);
+    igraph_eit_create(_graph, igraph_ess_vector(&candidate_edges_ids), &candidate_edges);
     // не очень понятно, зачем по списку id делать итератор, чтобы из него потом снова получать id
     // надо проверить, возможно это обеспечивает проверку, что такое ребро есть, но в целом я это могу сделать
     // и сама, не аллоцируя лишнюю память TODO
@@ -118,16 +175,16 @@ void Partition::RandomMerge(size_t edges_subsample_size) {
     while(!IGRAPH_EIT_END(candidate_edges)) {
         edge_id = IGRAPH_EIT_GET(candidate_edges);
         igraph_edge(_graph, edge_id, &from, &to);
-        comm1 = VECTOR(_membership)[from];
-        comm2 = VECTOR(_membership)[to];
+        comm1 = _membership.stor_begin[from];
+        comm2 = _membership.stor_begin[to];
         if (comm1 != comm2) {
             // if find an edge, connecting two different communities, 
             // merge these communities and break
             for (size_t i = 0; i < n_nodes; ++i) {
-                if (VECTOR(_membership)[i] == comm1) {
-                    VECTOR(_membership)[i] = comm2;
-                } else if (VECTOR(_membership)[i] == n_comms - 1) {
-                    VECTOR(_membership)[i] = comm1;
+                if (_membership.stor_begin[i] == comm1) {
+                    _membership.stor_begin[i] = comm2;
+                } else if (_membership.stor_begin[i] == n_comms - 1) {
+                    _membership.stor_begin[i] = comm1;
                 }
             }
             n_comms--;
@@ -136,51 +193,42 @@ void Partition::RandomMerge(size_t edges_subsample_size) {
         IGRAPH_EIT_NEXT(candidate_edges);
     }
     igraph_eit_destroy(&candidate_edges);
+    igraph_vector_int_destroy(&candidate_edges_ids);
 }
 
-Partition Partition::Mutate() {
+void Partition::Mutate() {
     if (FlipCoin()) {
         // split a random community
         igraph_integer_t comm_id_to_split = std::rand() % n_comms;
-        std::vector<size_t> indices_to_split_vector;
+        std::vector<int> indices_to_split_vector;
         for (size_t i = 0; i < n_nodes; ++i) {
-            if (VECTOR(*_membership)[i] == comm_id_to_split) {
+            if (_membership.stor_begin[i] == comm_id_to_split) {
                 indices_to_split_vector.push_back(i);
             }
         }
         igraph_vector_int_t indices_to_split;
-        igraph_vector_int_view(indices_to_split, indices_to_split_vector.data(), 
-                                                indices_to_split_vector.size());
-        if (igraph_vector_int_size(indices_to_split) > 2) {
+        copy_vector(&indices_to_split, indices_to_split_vector);
+        if (igraph_vector_int_size(&indices_to_split) > 2) {
             size_t min_comm_size_newman = 10; // hardcoded value
-            if (igraph_vector_int_size(indices_to_split) > min_comm_size_newman) {
+            if (igraph_vector_int_size(&indices_to_split) > min_comm_size_newman) {
                 if (FlipCoin()) {
                     // split via Newman's leading eigenvector method for detecting community structure
-                    NewmanSplit(indices_to_split, comm_id_to_split);
+                    NewmanSplit(&indices_to_split, comm_id_to_split);
                 } else {
                     // split randomly 
-                    RandomSplit(indices_to_split);
+                    RandomSplit(&indices_to_split);
                 }
             } else {
                 // split randomly
-                RandomSplit(indices_to_split);
+                RandomSplit(&indices_to_split);
             }
         } 
+        igraph_vector_int_destroy(&indices_to_split);
 
     } else {
         // randomly merge two connected communities 
         size_t edges_subsample_size = 10; // hardcoded value
         RandomMerge(edges_subsample_size);
-    }
-    return this;
-}
-
-
-//перенести функцию внутрб igraph либо переименовать под свой нейминг TODO
-void igraph_vector_int_init_with(igraph_vector_int_t* v, size_t size, int fill) {
-    igraph_vector_int_init(v, size);
-    for (size_t i = 0; i < size; ++i) {
-        VECTOR(v)[i] = fill;
     }
 }
 
@@ -190,11 +238,11 @@ void GetVertexIdVector(const igraph_t* graph, igraph_vector_int_t* out) {
     igraph_vector_int_init(out, igraph_vcount(graph));
     size_t i = 0;
     while (!IGRAPH_VIT_END(vit)) {
-        VECTOR(out)[i] = IGRAPH_VIT_GET(vit);
+        out->stor_begin[i] = IGRAPH_VIT_GET(vit);
         IGRAPH_VIT_NEXT(vit);
         i++;
     }
-    igraph_vit_destroy(vit);
+    igraph_vit_destroy(&vit);
 }
 
 void Partition::InitializePartition(double sample_fraction) {
@@ -202,37 +250,41 @@ void Partition::InitializePartition(double sample_fraction) {
     if (FlipCoin()) {
         // sample nodes
         auto subsample = chooser.RandomChoice(n_nodes, sample_fraction*n_nodes);
-        igraph_vector_int_t subsample_nodes_ids; //это вьюшка, destroy не нужен
-        igraph_vector_int_view(&subsample_nodes_ids, subsample.data(), subsample.size());
+        igraph_vector_int_t subsample_nodes_ids; 
+        copy_vector(&subsample_nodes_ids, subsample);
         igraph_induced_subgraph(_graph, &subgraph, igraph_vss_vector(&subsample_nodes_ids), 
                                                     IGRAPH_SUBGRAPH_AUTO);
+        igraph_vector_int_destroy(&subsample_nodes_ids);
     } else {
         // sample edges
         auto subsample = chooser.RandomChoice(n_edges, sample_fraction*n_edges);
-        igraph_vector_int_t subsample_edges_ids; //это вьюшка, destroy не нужен
-        igraph_vector_int_view(&subsample_edges_ids, subsample.data(), subsample.size());
+        igraph_vector_int_t subsample_edges_ids; 
+        copy_vector(&subsample_edges_ids, subsample);
         igraph_subgraph_from_edges(_graph, &subgraph, igraph_ess_vector(&subsample_edges_ids), 
                                                                                     true);
+        igraph_vector_int_destroy(&subsample_edges_ids);
     }
 
+    igraph_vector_t node_weights;
+    get_node_weights_for_modularity(&subgraph, &node_weights);
     auto n_nodes_subgraph = igraph_vcount(&subgraph);
-    igraph_vector_int_t node_weights;
-    igraph_vector_int_init(&node_weights, n_nodes_subgraph);
-    igraph_degree(&subgraph, &node_weights, igraph_vss_all(), IGRAPH_ALL, true);
-
     igraph_vector_int_t subgraph_membership; 
     igraph_vector_int_init(&subgraph_membership, n_nodes_subgraph);
     igraph_community_leiden(&subgraph, NULL, &node_weights, 1.0/(2*igraph_ecount(&subgraph)), 
             0.01, false, 2, &subgraph_membership, &n_comms, &_fittness); // objective function - modularity
     
-    igraph_vector_int_destroy(&node_weights);
+    igraph_vector_destroy(&node_weights);
 
     igraph_vector_int_t subgraph_vertices;
-    GetVertexIdVector(&subgraph, subgraph_vertices);
-    igraph_vector_int_init_with(&_membership, n_nodes, -1);
+    GetVertexIdVector(&subgraph, &subgraph_vertices);
+    igraph_vector_int_init(&_membership, n_nodes);
+    membership_is_inialized = true;
+    for (size_t i = 0; i < n_nodes; ++i) {
+        _membership.stor_begin[i] = -1;
+    }
     
     for (size_t i = 0; i < n_nodes_subgraph; ++i) {
-        VECTOR(_membership)[VECTOR(subgraph_vertices)[i]] = VECTOR(subgraph_membership)[i];
+        _membership.stor_begin[subgraph_vertices.stor_begin[i]] = subgraph_membership.stor_begin[i];
     }
 
     igraph_vector_int_destroy(&subgraph_vertices);
@@ -240,8 +292,8 @@ void Partition::InitializePartition(double sample_fraction) {
     igraph_destroy(&subgraph);
 
     for (size_t i = 0; i < n_nodes; ++i) {
-        if (VECTOR(_membership)[i] == -1) {
-            VECTOR(_membership)[i] = n_comms++;
+        if (_membership.stor_begin[i] == -1) {
+            _membership.stor_begin[i] = n_comms++;
         }
     }
 }
