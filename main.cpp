@@ -10,7 +10,6 @@
 
 #include <stdio.h>
 
-
 int main(int argc, char* argv[]) {
     std::srand(std::time(0));
 
@@ -39,7 +38,7 @@ int main(int argc, char* argv[]) {
     auto file_path = program.get<std::string>("--graph");
     FILE *file = fopen(file_path.c_str(), "r");
     igraph_t graph;
-    igraph_read_graph_edgelist(&graph, file, 0, false);
+    igraph_read_graph_edgelist(&graph, file, 0, false); //граф где-то утекает 
     fclose(file);
 
     GeneticAlgorithm algorithm(&graph, 
@@ -47,7 +46,7 @@ int main(int argc, char* argv[]) {
                    program.get<int>("--max_generations"),
                    program.get<int>("--workers"));
     auto res = algorithm.Run();
-    std::cout << "6\n";
+    igraph_destroy(&graph);
 
     return 0;
 }

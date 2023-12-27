@@ -3,6 +3,9 @@ project(cppTAU)
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fsanitize=address")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fsanitize=address")
+
 
 set(SOURCES
     main.cpp

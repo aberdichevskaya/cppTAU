@@ -6,7 +6,7 @@
 #include <ctime>
 
 #include <vector>
-
+#include <iostream>
 // https://igraph.org/c/doc 
 
 
@@ -22,6 +22,8 @@ class Partition {
                     const igraph_vector_int_t* init_partition=NULL);
     
     Partition();
+
+    Partition(const Partition& p);
 
     Partition& operator=(const Partition& p);
     
@@ -44,7 +46,6 @@ class Partition {
     size_t n_nodes;
     size_t n_edges;
     igraph_vector_int_t _membership;
-    bool membership_is_inialized;
     igraph_integer_t n_comms; //communities
     igraph_real_t _fittness;
     RandomChooser chooser;
@@ -56,4 +57,6 @@ class Partition {
     void RandomSplit(igraph_vector_int_t* indices);
 
     void RandomMerge(size_t edges_subsample_size);
+
+    void CheckMembershipSize();
 };

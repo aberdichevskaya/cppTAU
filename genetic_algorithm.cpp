@@ -76,16 +76,12 @@ GeneticAlgorithm::GeneticAlgorithm(const igraph_t* graph,
 }
 
 void GeneticAlgorithm::CreatePopulation(std::vector<Partition> &population) const {
-    std::cout << "create 1\n";
     std::mt19937 gen(std::random_device{}());
     std::uniform_real_distribution<double> dis(0.2, 0.9); //вынести это в поля? 
-    std::cout << "create 2\n";
     //это должно быть параллельным TODO
     for (size_t i = 0; i < population.size(); ++i) {
-        std::cout << i << "\n";
         population[i] = Partition(_graph, dis(gen));
     }
-    std::cout << "create 3\n";
 }
 
 void overlap(const igraph_vector_int_t* membership1,  // не сделать ли эту функцию статическим методом, причем наверное даже не geneticalgorithm, а partition? TODO 
@@ -233,34 +229,26 @@ std::vector<size_t> GeneticAlgorithm::EliteSelection() const {
 }
 
 std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
-    std::cout << "1\n";
     std::vector<double> best_modularity_per_generation; //неплохо бы сколько-то зарезервировать, но сколько?
     int32_t cnt_convergence = 0;
     igraph_vector_int_t last_best_partition;
     bool last_best_partition_is_initialized = false;
     Partition best_indiv;
-    std::cout << "2\n";
     CreatePopulation(_population);
-    std::cout << "3\n";
     for (int32_t generation_i = 1; generation_i <= max_generations; ++generation_i) {
         // TODO добавить замер времени
         for (auto& indiv : _population) { // TODO распараллелить
             indiv.Optimize();
         }
-        std::cout << generation_i << " optimized\n";
         std::stable_sort(/*std::execution::parallel_policy,*/ _population.begin(), _population.end(),
                             [](const Partition &a, const Partition &b) {
                                 return a.GetFittness() > b.GetFittness();
                             });
-        std::cout << generation_i << " sorted\n";
         // не то чтобы параллельная сортировка очень нужна, популяция маленькая, так что надо проверять TODO
 
         best_indiv = _population[0];
-        std::cout << generation_i << " got best indiv\n";
         double best_score = best_indiv.GetFittness();
-        std::cout << generation_i << " got best score\n";
         if (last_best_partition_is_initialized) {
-            std::cout << "last_best_partition_is_initialized\n";
             double sim_to_last_best = ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
                                     best_indiv.GetMembership(), &last_best_partition);
             if (sim_to_last_best > stopping_criterion_jaccard) {
@@ -268,7 +256,6 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
             } else {
                 cnt_convergence = 0;
             }
-            std::cout << generation_i << " changed convergence\n";
         } else {
             igraph_vector_int_init(&last_best_partition, igraph_vcount(_graph));
             last_best_partition_is_initialized = true;
@@ -279,7 +266,6 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
         }
 
         std::vector<size_t> elite_indices = EliteSelection();
-        std::cout << generation_i << " elite selected\n";
         std::vector<Partition> elite(n_elite);
         for (size_t i = 0; i < n_elite; ++i) {
             elite[i] = _population[elite_indices[i]];
@@ -287,14 +273,11 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
 
         // TODO parallel
         std::vector<Partition> offsprings = PopulationCrossover();
-        std::cout << generation_i << " population crossed\n";
         for (auto& offspring : offsprings) {
             offspring.Mutate();
         }
-        std::cout << generation_i << " mutated\n";
         std::vector<Partition> immigrants(n_immigrants);
         CreatePopulation(immigrants);
-        std::cout << generation_i << " immigrants created\n";
         // опять же, параллельность не то чтобы очень оправдана, но компилятор должен уметь самостоятельно принять это решение
         std::copy(/*std::execution::parallel_policy, */elite.begin(), 
                                 elite.end(), _population.begin());
@@ -303,8 +286,6 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
         std::copy(/*std::execution::parallel_policy, */offsprings.begin(), 
             offsprings.end(), _population.begin() + n_elite + n_immigrants);
         std::cout << "Generation " << generation_i << ". Best score: " << best_score << "\n";
-        std::cout << generation_i << " population renewed\n";
     }
-    std::cout << "end\n";
     return {best_indiv, best_modularity_per_generation};
 }

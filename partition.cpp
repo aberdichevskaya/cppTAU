@@ -34,14 +34,12 @@ size_t UniqueCnt(const igraph_vector_int_t* v) {
 Partition::Partition(const igraph_t* graph, double sample_fraction,
                     const igraph_vector_int_t* init_partition) 
   : n_nodes(igraph_vcount(graph))
-  , n_edges(igraph_ecount(graph))
-  , membership_is_inialized(false) {
+  , n_edges(igraph_ecount(graph)) {
     this->_graph = graph; //destroy only in main()
     if (init_partition == NULL) {
         InitializePartition(sample_fraction);
     } else {
         igraph_vector_int_init_copy(&_membership, init_partition);
-        membership_is_inialized = true;
         n_comms = UniqueCnt(&_membership);
     }
 }
@@ -49,47 +47,41 @@ Partition::Partition(const igraph_t* graph, double sample_fraction,
 Partition::Partition() 
     : n_nodes(0)
     , n_edges(0)
-    , membership_is_inialized(false)
-    , _graph(NULL) {}
+    , n_comms(0)
+    , _graph(NULL) {
+        igraph_vector_int_init(&_membership, 0);
+    }
 
+Partition::Partition(const Partition& p) 
+    : n_nodes(p.n_nodes)
+    , n_edges(p.n_edges) {
+        this->_graph = p._graph;
+        igraph_vector_int_init_copy(&_membership, &p._membership);
+        n_comms = p.n_comms;
+        _fittness = p._fittness;
+        chooser = p.chooser;
+}
 
 Partition& Partition::operator=(const Partition& p) {
-    // if (this != &p) { было бы неплохо, но это же ещё оператор != писать
-    std::cout << "partition operator= 1\n";
-    n_nodes = p.n_nodes;
-    n_edges = p.n_edges;
-    n_comms = p.n_comms;
-    std::cout << "partition operator= 2\n";
-    _fittness = p._fittness;
-    std::cout << "partition operator= 3\n";
-    if (!membership_is_inialized) {
-        std::cout << "partition operator= 4\n";
-        igraph_vector_int_init(&_membership, n_nodes);
-        membership_is_inialized = true;
-        std::cout << "partition operator= 5\n";
-    } 
-    std::cout << "partition operator= 6\n";
-    igraph_vector_int_update(&_membership, &p._membership);
-    std::cout << "partition operator= 7\n";
-    _graph = p._graph;
-    std::cout << "partition operator= 8\n";
-    chooser = p.chooser;
-    std::cout << "partition operator= 9\n";
+    if (this != &p) {
+        n_nodes = p.n_nodes;
+        n_edges = p.n_edges;
+        n_comms = p.n_comms;
+        _fittness = p._fittness;
+        igraph_vector_int_update(&_membership, &p._membership);
+        _graph = p._graph;
+        chooser = p.chooser;
+    }
     return *this;
 }
 
 Partition::~Partition() {
-    std::cout << "partition destructor 1\n";
     /*
     A likely cause is writing beyond the end of an allocated buffer.
     It typically occurs when the free() function is called on a memory block that has been modified or corrupted after allocation, possibly due to a buffer overflow, double free, or similar issues. 
     Debugging tools like Valgrind or AddressSanitizer can help identify the source of such issues.
     */
-    if (membership_is_inialized) {
-        igraph_vector_int_destroy(&_membership);
-        membership_is_inialized = false;
-    }
-    std::cout << "partition destructor 2\n";
+    igraph_vector_int_destroy(&_membership);
 }
 
 void get_node_weights_for_modularity(const igraph_t* graph, igraph_vector_t* node_weights) {
@@ -107,7 +99,9 @@ void get_node_weights_for_modularity(const igraph_t* graph, igraph_vector_t* nod
 void Partition::Optimize() {
     igraph_vector_t node_weights; // сделать полем класса? TODO
     get_node_weights_for_modularity(_graph, &node_weights);
-
+    if (igraph_vector_int_size(&_membership) != n_nodes) {
+        igraph_vector_int_resize(&_membership, n_nodes);
+    }
     igraph_community_leiden(_graph, NULL, &node_weights, 1.0/(2*n_edges), 
                     0.01, true, 3, &_membership, &n_comms, &_fittness);
     
@@ -278,7 +272,6 @@ void Partition::InitializePartition(double sample_fraction) {
     igraph_vector_int_t subgraph_vertices;
     GetVertexIdVector(&subgraph, &subgraph_vertices);
     igraph_vector_int_init(&_membership, n_nodes);
-    membership_is_inialized = true;
     for (size_t i = 0; i < n_nodes; ++i) {
         _membership.stor_begin[i] = -1;
     }
