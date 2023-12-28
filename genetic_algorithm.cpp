@@ -6,6 +6,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <random>
+#include <chrono>
 
 // нужно взвесить, насколько мне действительно нужен отдельный RandomChooser
 
@@ -71,8 +72,9 @@ GeneticAlgorithm::GeneticAlgorithm(const igraph_t* graph,
         }
         this->_graph = graph;
         probs = CalculateProbabilities(selection_power, population_size);
-        std::cout << "Main parameter values: pop_size = " << population_size << 
-            ", workers = " << n_workers << ", max_generations = " << max_generations << "\n";
+        std::cout << "Main parameter values: pop_size = " << this->population_size << 
+            ", workers = " << this->n_workers << ", max_generations = " << 
+            this->max_generations << "\n";
 }
 
 void GeneticAlgorithm::CreatePopulation(std::vector<Partition> &population) const {
@@ -111,6 +113,7 @@ Partition GeneticAlgorithm::SingleCrossover(size_t idx1, size_t idx2) const {
     igraph_vector_int_init(&partitions_overlap, igraph_vector_int_size(membership1));
     overlap(membership1, membership2, &partitions_overlap);
     Partition offspring(_graph, 0.5, &partitions_overlap);
+    igraph_vector_int_destroy(&partitions_overlap);
     return offspring;
 }
 
@@ -185,20 +188,24 @@ double ComputePartitionSimilarityJaccard(const igraph_vector_int_t* membership1,
                                 const igraph_vector_int_t* membership2) {
     int a = 0, c = 0, d = 0;
     size_t n = igraph_vector_int_size(membership1);
+
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = i + 1; j < n; ++j) {
             bool in_same_cluster_1 = membership1->stor_begin[i] == membership1->stor_begin[j];
             bool in_same_cluster_2 = membership2->stor_begin[i] == membership2->stor_begin[j];
+
             if (in_same_cluster_1 && in_same_cluster_2) {
-                a++;
-            } else if (in_same_cluster_1 || in_same_cluster_2) {
+                a++; 
+            }
+            else if (in_same_cluster_1 && !in_same_cluster_2) {
                 c++;
-            } else {
+            }
+            else if (!in_same_cluster_1 && in_same_cluster_2) {
                 d++;
             }
         }
     }
-    double jac = static_cast<double>(a) / (a + c + d);
+    double jac = a / static_cast<double>(a + c + d);
     return jac;
 }
 
@@ -232,10 +239,12 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
     std::vector<double> best_modularity_per_generation; //неплохо бы сколько-то зарезервировать, но сколько?
     int32_t cnt_convergence = 0;
     igraph_vector_int_t last_best_partition;
-    bool last_best_partition_is_initialized = false;
+    igraph_vector_int_init(&last_best_partition, 0);
     Partition best_indiv;
+    std::vector<double> population_fittnesses(population_size);
     CreatePopulation(_population);
     for (int32_t generation_i = 1; generation_i <= max_generations; ++generation_i) {
+        auto start = std::chrono::high_resolution_clock::now();
         // TODO добавить замер времени
         for (auto& indiv : _population) { // TODO распараллелить
             indiv.Optimize();
@@ -248,7 +257,12 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
 
         best_indiv = _population[0];
         double best_score = best_indiv.GetFittness();
-        if (last_best_partition_is_initialized) {
+        double average_score = 0;
+        for (size_t i = 0; i < population_size; ++i) {
+            average_score += _population[i].GetFittness();
+        }
+        average_score /= population_size;
+        if (igraph_vector_int_size(&last_best_partition) != 0) {
             double sim_to_last_best = ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
                                     best_indiv.GetMembership(), &last_best_partition);
             if (sim_to_last_best > stopping_criterion_jaccard) {
@@ -256,10 +270,7 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
             } else {
                 cnt_convergence = 0;
             }
-        } else {
-            igraph_vector_int_init(&last_best_partition, igraph_vcount(_graph));
-            last_best_partition_is_initialized = true;
-        }
+        } 
         igraph_vector_int_update(&last_best_partition, best_indiv.GetMembership());
         if (cnt_convergence == stopping_criterion_generations || generation_i == max_generations) {
             break;
@@ -285,7 +296,13 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
             immigrants.end(), _population.begin() + n_elite);
         std::copy(/*std::execution::parallel_policy, */offsprings.begin(), 
             offsprings.end(), _population.begin() + n_elite + n_immigrants);
-        std::cout << "Generation " << generation_i << ". Best score: " << best_score << "\n";
+        
+        auto finish = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = finish - start;
+        std::cout << "Generation " << generation_i << ". Best score: " << best_score
+            << ". Average fitness: " << average_score << " Time per generation: " 
+            << elapsed.count() << ". Convergence: " << cnt_convergence << "\n";
     }
+    igraph_vector_int_destroy(&last_best_partition);
     return {best_indiv, best_modularity_per_generation};
 }

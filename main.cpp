@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
         .required()
         .help("path to graph file; supports adjacency list format.");
     program.add_argument("--size")
-        .default_value(60)
+        .default_value(600)
         .help("size of population; default is 60.");
     program.add_argument("--workers")
         .default_value(0) 
