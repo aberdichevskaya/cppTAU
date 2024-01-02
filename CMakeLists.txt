@@ -1,11 +1,24 @@
 cmake_minimum_required(VERSION 3.18)
-project(cppTAU)
+
+set(PROJECT_NAME cppTAU)
+project(${PROJECT_NAME})
 
 set(CMAKE_CXX_STANDARD 17)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fsanitize=address")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fsanitize=address")
+find_package(OpenMP REQUIRED)
 
+option(USE_SANITIZER "Use address sanitizer" OFF)
+
+if(USE_SANITIZER MATCHES address)
+    message(STATUS "Using Address Sanitizer")
+    add_compile_options(-g -fsanitize=address)
+elseif(CMAKE_BUILD_TYPE MATCHES Debug)
+    message(STATUS "Debug build type: Adding -g flag for debugging")
+    add_compile_options(-g)
+elseif(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE MATCHES Release)
+    message(STATUS "Setting default build type to Release")
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Set build type to default (Release)." FORCE)
+endif()
 
 set(SOURCES
     main.cpp
@@ -14,7 +27,6 @@ set(SOURCES
     random_chooser.cpp
 )
 
-
 set(HEADERS
     random_chooser.h
     partition.h
@@ -22,16 +34,17 @@ set(HEADERS
     argparse.hpp
 )
 
-
-include_directories(igraph/) 
-
-
 add_subdirectory(igraph)
 
-add_executable(cppTAU ${SOURCES} ${HEADERS})
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+target_include_directories(${PROJECT_NAME} PUBLIC igraph/)
 
-target_link_libraries(cppTAU igraph)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(${PROJECT_NAME} PUBLIC OpenMP::OpenMP_CXX)
+endif()
+
+target_link_libraries(${PROJECT_NAME} PUBLIC igraph)
 
 # Если igraph зависит от других библиотек, вам также может потребоваться их подключить.
 # Например:
-# target_link_libraries(cppTAU m gmp glpk)
+# target_link_libraries(${PROJECT_NAME} m gmp glpk)

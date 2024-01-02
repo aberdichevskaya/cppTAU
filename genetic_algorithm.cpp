@@ -1,5 +1,7 @@
 #include "genetic_algorithm.h"
 
+#include <omp.h>
+
 //#include <execution>
 #include <algorithm>
 #include <thread>
@@ -61,6 +63,7 @@ GeneticAlgorithm::GeneticAlgorithm(const igraph_t* graph,
     , stopping_criterion_jaccard(stopping_criterion_jaccard)
     , elite_similarity_threshold(elite_similarity_threshold)
     , _population(population_size) {
+        this->_graph = graph;
         if (n_workers == 0) {
             this->n_workers = std::min(size_t(std::thread::hardware_concurrency()), population_size);
         } else {
@@ -70,7 +73,8 @@ GeneticAlgorithm::GeneticAlgorithm(const igraph_t* graph,
                                             return a < b;
                                         });
         }
-        this->_graph = graph;
+        omp_set_num_threads(this->n_workers);
+        omp_set_dynamic(1);
         probs = CalculateProbabilities(selection_power, population_size);
         std::cout << "Main parameter values: pop_size = " << this->population_size << 
             ", workers = " << this->n_workers << ", max_generations = " << 
