@@ -9,13 +9,14 @@ find_package(OpenMP REQUIRED)
 
 option(USE_SANITIZER "Use address sanitizer" OFF)
 
-if(USE_SANITIZER MATCHES address)
+if(USE_SANITIZER MATCHES address AND CMAKE_BUILD_TYPE MATCHES Debug)
     message(STATUS "Using Address Sanitizer")
-    add_compile_options(-g -fsanitize=address)
+    add_compile_options(-fsanitize=address)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
 elseif(CMAKE_BUILD_TYPE MATCHES Debug)
     message(STATUS "Debug build type: Adding -g flag for debugging")
     add_compile_options(-g)
-elseif(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE MATCHES Release)
+else()
     message(STATUS "Setting default build type to Release")
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Set build type to default (Release)." FORCE)
 endif()
@@ -44,7 +45,3 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC igraph)
-
-# Если igraph зависит от других библиотек, вам также может потребоваться их подключить.
-# Например:
-# target_link_libraries(${PROJECT_NAME} m gmp glpk)

@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <random>
 #include <chrono>
+#include <map>
 
 // нужно взвесить, насколько мне действительно нужен отдельный RandomChooser
 
@@ -84,7 +85,7 @@ GeneticAlgorithm::GeneticAlgorithm(const igraph_t* graph,
 void GeneticAlgorithm::CreatePopulation(std::vector<Partition> &population) const {
     std::mt19937 gen(std::random_device{}());
     std::uniform_real_distribution<double> dis(0.2, 0.9); //вынести это в поля? 
-    //это должно быть параллельным TODO
+    #pragma omp parallel for
     for (size_t i = 0; i < population.size(); ++i) {
         population[i] = Partition(_graph, dis(gen));
     }
@@ -97,7 +98,7 @@ void overlap(const igraph_vector_int_t* membership1,  // не сделать л�
     igraph_vector_int_update(consensus, membership1); //точно ли надо делать глубокое копирование. TODO проверить, нужен ли потом ещё membership старого разбиения
     std::unordered_map<int64_t, int64_t> consensus_values;
     igraph_integer_t comm = 0;
-    // TODO распараллелить
+    #pragma omp parallel for
     for (size_t i = 0; i < igraph_vector_int_size(membership1); ++i) {
         if (membership1->stor_begin[i] == membership2->stor_begin[i]) {
             if (!consensus_values.count(membership1->stor_begin[i])) {
@@ -137,7 +138,6 @@ std::vector<Partition> GeneticAlgorithm::PopulationCrossover() const {
         }
     }
     std::vector<Partition> crossed_offsprings(indices_to_cross.size());
-    //TODO распараллелить
     for (size_t i = 0; i < indices_to_cross.size(); ++i) {
         crossed_offsprings[i] = SingleCrossover(indices_to_cross[i].first, 
                                                 indices_to_cross[i].second);
@@ -152,7 +152,6 @@ std::vector<Partition> GeneticAlgorithm::PopulationCrossover() const {
 // ARI сложнее, O(k^2) памяти, ассимптотика O(n^2), но оптимизируется до O(nk) или O(n). Точнее и чувствительнее
 // TODO сравнить их на практике и выбрать оптимальный
 // либо добавить пользователю возможность выбирать, но это чёт сложно
-// TODO оба индекса хорошо параллелятся. Хотя в этом не особо есть смысл, это будет вложенная параллелизация
 inline double comb2(int n) {
     return static_cast<double>(n) * (n - 1) / 2.0;
 }
@@ -193,6 +192,7 @@ double ComputePartitionSimilarityJaccard(const igraph_vector_int_t* membership1,
     int a = 0, c = 0, d = 0;
     size_t n = igraph_vector_int_size(membership1);
 
+    #pragma omp parallel for reduction(+:a,c,d)
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = i + 1; j < n; ++j) {
             bool in_same_cluster_1 = membership1->stor_begin[i] == membership1->stor_begin[j];
@@ -215,17 +215,23 @@ double ComputePartitionSimilarityJaccard(const igraph_vector_int_t* membership1,
 
 
 std::vector<size_t> GeneticAlgorithm::EliteSelection() const {
-// пока вообще без оптимизаций
-// TODO возможные оптимизации: параллельность; проверка, что не происходит повторное пересчитывание similarity
-// для одной и той же пары разбиений; ограничение на количество итераций (и опция докинуть просто случайные разбиения в элиту)
     std::vector<size_t> elite_indices = {0}; // starting with an assumption that [0] is already an elite (because population is sorted)
+    elite_indices.reserve(n_elite);
     size_t candidate_idx = 1; // element index to start checking
-    while (elite_indices.size() < n_elite && candidate_idx < _population.size()) {
+    size_t computation_cycle_i = 1;
+    size_t max_cycles = 2; // hardcoded. add as an argument? too small number
+    std::map<std::pair<size_t, size_t>, double> similarity_cache;
+    while (elite_indices.size() < n_elite && candidate_idx < _population.size() && computation_cycle_i < max_cycles) {
         bool is_elite = true;
         for (auto elite_idx : elite_indices) {
-            double similarity =  ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
+            auto idx_pair = std::make_pair(elite_idx, candidate_idx);
+            if (!similarity_cache.count(idx_pair)) {
+                computation_cycle_i++;
+                similarity_cache[idx_pair] =  ComputePartitionSimilarityJaccard( // ComputePartitionSimilarityARI(
                                     _population[elite_idx].GetMembership(),
                                     _population[candidate_idx].GetMembership()); 
+            }
+            double similarity = similarity_cache[idx_pair];
             if (similarity > elite_similarity_threshold) {
                 is_elite = false;
                 break;
@@ -235,6 +241,12 @@ std::vector<size_t> GeneticAlgorithm::EliteSelection() const {
             elite_indices.push_back(candidate_idx);
         }
         candidate_idx++;
+    }
+    if (elite_indices.size() < n_elite) {
+        size_t random_elite_n = n_elite - elite_indices.size();
+        auto random_elite_indices = chooser.RandomChoice(population_size, random_elite_n);
+        elite_indices.insert(elite_indices.end(), random_elite_indices.begin(),
+                            random_elite_indices.end());
     }
     return elite_indices;
 }
@@ -249,9 +261,10 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
     CreatePopulation(_population);
     for (int32_t generation_i = 1; generation_i <= max_generations; ++generation_i) {
         auto start = std::chrono::high_resolution_clock::now();
-        // TODO добавить замер времени
-        for (auto& indiv : _population) { // TODO распараллелить
-            indiv.Optimize();
+
+        #pragma omp parallel for
+        for (size_t i = 0; i < population_size; ++i) { 
+            _population[i].Optimize();
         }
         std::stable_sort(/*std::execution::parallel_policy,*/ _population.begin(), _population.end(),
                             [](const Partition &a, const Partition &b) {
@@ -286,10 +299,10 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
             elite[i] = _population[elite_indices[i]];
         }
 
-        // TODO parallel
         std::vector<Partition> offsprings = PopulationCrossover();
-        for (auto& offspring : offsprings) {
-            offspring.Mutate();
+        #pragma omp parallel for
+        for (size_t i = 0; i < n_offspring; ++i) {
+            offsprings[i].Mutate();
         }
         std::vector<Partition> immigrants(n_immigrants);
         CreatePopulation(immigrants);
