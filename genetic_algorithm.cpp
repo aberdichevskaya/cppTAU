@@ -13,7 +13,7 @@
 
 // нужно взвесить, насколько мне действительно нужен отдельный RandomChooser
 
-int64_t binpow(int64_t x, int32_t a) {
+inline int64_t binpow(int64_t x, int32_t a) {
     int64_t res = 1;
     for (; a > 0; a >>= 1) {
         if (a & 1) {
@@ -98,7 +98,6 @@ void overlap(const igraph_vector_int_t* membership1,  // не сделать л�
     igraph_vector_int_update(consensus, membership1); //точно ли надо делать глубокое копирование. TODO проверить, нужен ли потом ещё membership старого разбиения
     std::unordered_map<int64_t, int64_t> consensus_values;
     igraph_integer_t comm = 0;
-    #pragma omp parallel for
     for (size_t i = 0; i < igraph_vector_int_size(membership1); ++i) {
         if (membership1->stor_begin[i] == membership2->stor_begin[i]) {
             if (!consensus_values.count(membership1->stor_begin[i])) {
@@ -138,6 +137,7 @@ std::vector<Partition> GeneticAlgorithm::PopulationCrossover() const {
         }
     }
     std::vector<Partition> crossed_offsprings(indices_to_cross.size());
+    #pragma omp parallel for
     for (size_t i = 0; i < indices_to_cross.size(); ++i) {
         crossed_offsprings[i] = SingleCrossover(indices_to_cross[i].first, 
                                                 indices_to_cross[i].second);
@@ -259,19 +259,21 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
     Partition best_indiv;
     std::vector<double> population_fittnesses(population_size);
     CreatePopulation(_population);
+    std::cout << "population created\n";
     for (int32_t generation_i = 1; generation_i <= max_generations; ++generation_i) {
         auto start = std::chrono::high_resolution_clock::now();
-
+        std::cout << "generation " << generation_i << "\n";
         #pragma omp parallel for
         for (size_t i = 0; i < population_size; ++i) { 
             _population[i].Optimize();
         }
+        std::cout << "optimized\n";
         std::stable_sort(/*std::execution::parallel_policy,*/ _population.begin(), _population.end(),
                             [](const Partition &a, const Partition &b) {
                                 return a.GetFittness() > b.GetFittness();
                             });
         // не то чтобы параллельная сортировка очень нужна, популяция маленькая, так что надо проверять TODO
-
+        std::cout << "sorted\n";
         best_indiv = _population[0];
         double best_score = best_indiv.GetFittness();
         double average_score = 0;
@@ -294,18 +296,22 @@ std::pair<Partition, std::vector<double>> GeneticAlgorithm::Run() {
         }
 
         std::vector<size_t> elite_indices = EliteSelection();
+        std::cout << "elite selected\n";
         std::vector<Partition> elite(n_elite);
         for (size_t i = 0; i < n_elite; ++i) {
             elite[i] = _population[elite_indices[i]];
         }
 
         std::vector<Partition> offsprings = PopulationCrossover();
+        std::cout << "crossover done\n";
         #pragma omp parallel for
         for (size_t i = 0; i < n_offspring; ++i) {
             offsprings[i].Mutate();
         }
+        std::cout << "mutated\n";
         std::vector<Partition> immigrants(n_immigrants);
         CreatePopulation(immigrants);
+        std::cout << "immigrants created\n";
         // опять же, параллельность не то чтобы очень оправдана, но компилятор должен уметь самостоятельно принять это решение
         std::copy(/*std::execution::parallel_policy, */elite.begin(), 
                                 elite.end(), _population.begin());

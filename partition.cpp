@@ -18,7 +18,7 @@
 // for (double *ptr = vec.stor_begin; ptr != vec.end; ++ptr) { ... } - но авторы igraph не ракомендуют так делать, мол библиотека и поменяться может
 
 static inline bool FlipCoin() {
-    static std::mt19937 engine(std::random_device{}());
+    thread_local std::mt19937 engine(std::random_device{}());
     static std::bernoulli_distribution distribution(0.5);
     return distribution(engine);
 }
@@ -42,6 +42,7 @@ Partition::Partition(const igraph_t* graph, double sample_fraction,
         igraph_vector_int_init_copy(&_membership, init_partition);
         n_comms = UniqueCnt(&_membership);
     }
+    //std::cout << "partition " << n_nodes << " " << n_edges << "\n";
 }
 
 Partition::Partition() 
