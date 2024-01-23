@@ -7,14 +7,7 @@
 
 #include <vector>
 #include <iostream>
-// https://igraph.org/c/doc 
-
-
-// мб стоит брать не igraph, а Graph из libleidenalg/include/GraphHelper.h
-// с другой стороны, subgraph там кажется нет
-
-// может быть написать graph_helper как в libleidenalg?
-// не пойму, надо ли хранить указатель на igraph, или норм хранить объект
+#include <mutex>
 
 class Partition {
  public:
@@ -34,10 +27,12 @@ class Partition {
     void Mutate();
 
     igraph_real_t GetFittness() const {
+      std::lock_guard<std::mutex> lock(mtx);
       return _fittness;
     }
 
-    const igraph_vector_int_t* GetMembership() const { // точно const?
+    const igraph_vector_int_t* GetMembership() const { // лочить внутри этого метода мьютекс смысла нет. надо какую-то оболочку использовать для вектора или хз что
+      //возможно, стоит вообще не выдавать доступ к _membership (убрать этот метод), и сделать внутренние методы, которые будут таскать _membership + какие-то методы, которые сами обращаются к индексу в _membership
       return &_membership;
     }
 
@@ -49,6 +44,7 @@ class Partition {
     igraph_integer_t n_comms; //communities
     igraph_real_t _fittness;
     RandomChooser chooser;
+    mutable std::mutex mtx;
 
     void InitializePartition(double sample_fraction);
 

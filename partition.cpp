@@ -8,14 +8,8 @@
 #include <random>
 #include <iostream>
 
-// всякие перкладывания значений из одного вектора в другой точно надо параллелить TODO
-// хотя и возникнет много вложенной параллелизации, которой нет
 
 // проверить, вдруг алгоритм leiden быстрее в libleidenalg TODO
-
-// не использовать VECTOR, а просто тыкать stor_begin, наверное это быстрее TODO
-// то же самое касается всех макросов для итераторов
-// for (double *ptr = vec.stor_begin; ptr != vec.end; ++ptr) { ... } - но авторы igraph не ракомендуют так делать, мол библиотека и поменяться может
 
 static inline bool FlipCoin() {
     thread_local std::mt19937 engine(std::random_device{}());
@@ -56,6 +50,7 @@ Partition::Partition()
 Partition::Partition(const Partition& p) 
     : n_nodes(p.n_nodes)
     , n_edges(p.n_edges) {
+        std::lock_guard<std::mutex> lock_other(p.mtx);
         this->_graph = p._graph;
         igraph_vector_int_init_copy(&_membership, &p._membership);
         n_comms = p.n_comms;
@@ -65,6 +60,7 @@ Partition::Partition(const Partition& p)
 
 Partition& Partition::operator=(const Partition& p) {
     if (this != &p) {
+        std::scoped_lock lock(mtx, p.mtx);
         n_nodes = p.n_nodes;
         n_edges = p.n_edges;
         n_comms = p.n_comms;
@@ -77,11 +73,6 @@ Partition& Partition::operator=(const Partition& p) {
 }
 
 Partition::~Partition() {
-    /*
-    A likely cause is writing beyond the end of an allocated buffer.
-    It typically occurs when the free() function is called on a memory block that has been modified or corrupted after allocation, possibly due to a buffer overflow, double free, or similar issues. 
-    Debugging tools like Valgrind or AddressSanitizer can help identify the source of such issues.
-    */
     igraph_vector_int_destroy(&_membership);
 }
 
@@ -98,6 +89,7 @@ void get_node_weights_for_modularity(const igraph_t* graph, igraph_vector_t* nod
 }
 
 void Partition::Optimize() {
+    std::lock_guard<std::mutex> lock(mtx);
     igraph_vector_t node_weights; // сделать полем класса? TODO
     get_node_weights_for_modularity(_graph, &node_weights);
     if (igraph_vector_int_size(&_membership) != n_nodes) {
@@ -192,6 +184,7 @@ void Partition::RandomMerge(size_t edges_subsample_size) {
 }
 
 void Partition::Mutate() {
+    std::lock_guard<std::mutex> lock(mtx);
     if (FlipCoin()) {
         // split a random community
         igraph_integer_t comm_id_to_split = std::rand() % n_comms;
