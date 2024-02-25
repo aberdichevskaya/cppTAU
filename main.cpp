@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     auto file_path = program.get<std::string>("--graph");
     FILE *file = fopen(file_path.c_str(), "r");
     igraph_t graph;
-    igraph_read_graph_edgelist(&graph, file, 0, false); //граф где-то утекает 
+    igraph_read_graph_edgelist(&graph, file, 0, false); 
     fclose(file);
 
     GeneticAlgorithm algorithm(&graph, 
