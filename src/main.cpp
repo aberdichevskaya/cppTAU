@@ -1,7 +1,7 @@
-#include "genetic_algorithm.h"
-#include "igraph/include/igraph.h"
+#include "genetic_algorithm/genetic_algorithm.h"
+
+#include "igraph.h"
 #include "argparse.hpp"
-#include "partition.h"
 
 #include <string>
 #include <vector>

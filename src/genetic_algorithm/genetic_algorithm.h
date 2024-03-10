@@ -1,9 +1,9 @@
 #pragma once
 
-#include "igraph/include/igraph.h"
+#include "igraph.h"
 
-#include "partition.h"
-#include "random_chooser.h"
+#include "../partition/partition.h" //TODO make a pretty filepath 
+#include "../random_chooser/random_chooser.h"
 
 #include <vector>
 #include <random>

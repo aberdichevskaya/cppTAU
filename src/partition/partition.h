@@ -1,7 +1,7 @@
 #pragma once
 
-#include "random_chooser.h"
-#include "igraph/include/igraph.h"
+#include "../random_chooser/random_chooser.h" //TODO make a pretty filepath 
+#include "igraph.h"
 
 #include <ctime>
 

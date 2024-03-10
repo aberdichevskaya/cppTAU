@@ -1,7 +1,4 @@
-// не протестированно 
-
 #include "partition.h"
-#include "random_chooser.h"
 
 #include <unordered_set>
 #include <algorithm>

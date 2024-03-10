@@ -31,27 +31,5 @@ else()
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Set build type to default (Release)." FORCE)
 endif()
 
-set(SOURCES
-    main.cpp
-    partition.cpp
-    genetic_algorithm.cpp
-    random_chooser.cpp
-)
-
-set(HEADERS
-    random_chooser.h
-    partition.h
-    genetic_algorithm.h
-    argparse.hpp
-)
-
-add_subdirectory(igraph)
-
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
-target_include_directories(${PROJECT_NAME} PUBLIC igraph/)
-
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(${PROJECT_NAME} PUBLIC OpenMP::OpenMP_CXX)
-endif()
-
-target_link_libraries(${PROJECT_NAME} PUBLIC igraph)
+add_subdirectory(vendor/igraph)
+add_subdirectory(src)
